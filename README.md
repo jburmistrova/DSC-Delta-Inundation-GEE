@@ -12,4 +12,4 @@ You will need to import the shapefiles in the following order: [Yolo Bypass](htt
 
 The code will look like this:
 
-![Shapefile Import](screenshots/shapefile_order.png)
+![Shapefile Import](screenshots/shapefile_order.png =x250)
