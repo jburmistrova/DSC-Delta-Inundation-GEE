@@ -11,4 +11,4 @@ When you open the Google Earth Engine program, you will see the following user i
 You will need to import the shapefiles in the following order: [Yolo Bypass](https://code.earthengine.google.com/?asset=users/valle/yolo_bypass) and then [Yolo Wildlife](https://code.earthengine.google.com/?asset=users/valle/yolo_wildlife)
 
 The code will look like this:
-![Shapefile Import](screenshots/ui_start.png)
+![Shapefile Import](screenshots/shapfile_order.png)
