@@ -17,6 +17,7 @@ When you open the Google Earth Engine program, you will see the following user i
 If you are copy/pasting the code, you will need to import the shapefiles in the following order: [Yolo Bypass](https://code.earthengine.google.com/?asset=users/valle/yolo_bypass) and then [Yolo Wildlife](https://code.earthengine.google.com/?asset=users/valle/yolo_wildlife)
 
 It will look like this:
+
 ![Shapefile Import Order](screenshots/shapefile_order.png)
 
 ## Click the "Run" button
