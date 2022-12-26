@@ -1,10 +1,12 @@
 # Yolo Bypass and Wildlife Area Inundation Mapping using Sentinel-1 and Sentinel-2
 ### Code Author: Julia Burmistrova
 
-# The code
+# Code
 Settings are set to anyone can access the repo:
 [GEE Code](https://code.earthengine.google.com/?accept_repo=users/valle/Yolo_Inundation_Mapping)
 
+
+# UI
 When you open the Google Earth Engine program, you will see the following user interface. 
 
 ![Google Earth Engine UI for Inundation Mapping](screenshots/ui_start.png)
