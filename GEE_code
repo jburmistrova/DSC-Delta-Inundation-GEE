@@ -1,0 +1,847 @@
+
+//Convert From Table to Geometry
+var bypass = ee.FeatureCollection(table).geometry()
+var wildlife = ee.FeatureCollection(table2).geometry()
+
+//Threshold values from research completed by Julia Burmistrova in R
+//Citation: TBD once published in 2022
+var thresholdAWEI = -761.25
+var thresholdLeeSigma = -16.44582367
+
+// Set polygon to bypass as default, this is just to prevent an error
+// NOTE: script will not run unless user chooses from dropdown menu 
+var polygon = bypass
+
+
+// Import palettes for mapping 
+var palettes = require('users/gena/packages:palettes');
+
+var palette = palettes.matplotlib.viridis[7];
+var visParam = {min: 0, 
+                max: 1, 
+                palette: palette};
+
+
+/* ~~~~~~~~~~~~~~~~~~~~ START USER INTERFACE ~~~~~~~~~~~~~~~~~~~
+Initialize the UI. 
+Clear the default UI since we're adding our own main and map panels.
+*/
+ui.root.clear();
+var mapPanel = ui.Map();
+ui.root.widgets().reset([mapPanel]);
+
+
+// Generate main panel and add it to the map.
+var panel = ui.Panel({style: {width:'300px'}});
+ui.root.insert(0,panel);
+
+// Define title and description.
+var intro = ui.Label('Yolo Bypass Inundation ',
+  {fontWeight: 'bold', fontSize: '24px', margin: '10px 5px'}
+);
+var subtitle = ui.Label('Use 10 m Sentinels 1 and 2 imagery to'+
+  ' visualize changes in floodplain inundation and potential functional flows over time.'+
+  ' Select from 2 shapefiles and select your time series.'+
+  ' A water year is between October 01 to September 30.', {});
+
+// Add title and description to the panel.  
+panel.add(intro).add(subtitle);
+
+
+var firstSubTitle_text = 'Select the Start and End dates';
+  var firstSubTitle = ui.Label(firstSubTitle_text, 
+  {fontWeight: 'bold', fontSize: '16px', margin: '10px 5px'});
+  panel.add(firstSubTitle);
+
+//Get Today's date and pass it as default End date. 
+var now = new Date();
+var nowStr = now.toLocaleDateString('en-CA'); 
+
+
+var startDate = ui.DateSlider({start: ee.Date("2019-01-01"), 
+                            end: nowStr, 
+                            value: ee.Date("2019-01-01"), 
+                            style: {stretch: 'horizontal', width:'250px'}})
+
+var endDate = ui.DateSlider({start: ee.Date("2019-01-01"), 
+                            end: nowStr, 
+                            value: nowStr, 
+                            style: {stretch: 'horizontal', width:'250px'}})
+
+
+
+
+//Enter earliest start date for Sentinel-1 & 2
+
+panel.add(startDate);
+panel.add(endDate);
+
+  
+// Define labels for each study region.
+var WILDLIFE = 'Yolo Bypass Wildlife Area';
+var BYPASS = 'Yolo Bypass (entire floodplain)'
+
+
+/*
+Select Cloud Cover
+*/
+
+var secondSubTitle_text = 'Cloud Cover Filter (%)';
+  var secondSubTitle = ui.Label(secondSubTitle_text, 
+  {fontWeight: 'bold', fontSize: '16px', margin: '10px 5px'});
+  panel.add(secondSubTitle);
+
+var ccSlider = ui.Slider({
+  min: 1, 
+  max: 100, 
+  value: 5, 
+  step: 1, 
+  style: {stretch: 'horizontal', width:'250px'}
+  });
+  
+panel.add(ccSlider)
+
+
+/*
+Select Area of INTEREST
+*/
+
+
+
+// Define the select button for the AOI
+var selectAoi = ui.Select({
+  items:[WILDLIFE, BYPASS]
+  });
+
+// Add a label.
+var selectSIAOI = ui.Label({value:'Select area of interest',
+style: {fontSize: '16px', fontWeight: 'bold'}});
+
+// Add the select AOI panel to the map panel.
+panel.add(selectSIAOI)
+    .add(selectAoi);
+
+
+/*
+Add Checkboxes for Water/NotWater maps
+*/
+
+var subtitlewatermaps = ui.Label({value:'Add water maps?',
+style: {fontSize: '16px', fontWeight: 'bold'}});
+
+var subtitle2 = ui.Label('NOTE: adding maps will significantly increase'+
+' processing time depending on the number of images. Please use'+
+' with caution.', {});
+
+var S1watermaps = ui.Checkbox("Add Sentinel-1 Water Maps", false)
+var S2watermaps = ui.Checkbox("Add Sentinel-2 Water Maps", false)
+
+panel.add(subtitlewatermaps);
+panel.add(subtitle2)
+panel.add(S1watermaps);
+panel.add(S2watermaps);
+
+
+ 
+// Use a SplitPanel so it's possible to resize the two panels.
+var splitPanel = ui.SplitPanel({
+  firstPanel: panel,
+  secondPanel: mapPanel,
+  orientation: 'horizontal',
+  style: {stretch: 'both'}
+});
+
+// Set the SplitPanel as the only thing in root.
+ui.root.widgets().reset([splitPanel]);
+
+
+
+// ~~~~~~ END USER INTERFACE ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+//~~~~~~~~~~~~~~~~ START PROCESSING ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+var submit = ui.Button({
+  label: 'Calculate Water Area',
+  onClick: function() {
+    mapPanel.clear()
+
+print(selectAoi.getValue())
+
+/*
+Defining the area of interest
+*/
+
+var setAreaOfInterest = function(aoi){
+  if (aoi == BYPASS){
+      var areaOfInterest = bypass;
+  }
+  else if(aoi == WILDLIFE){
+      var areaOfInterest = wildlife;
+  }
+  return areaOfInterest
+};
+
+
+var polygon = setAreaOfInterest(selectAoi.getValue())
+
+
+// Apply the centroid method to the Polygon object.
+var polygonCentroid = polygon.centroid({'maxError': 1});
+var polygonCentLatLon = polygonCentroid.coordinates();
+
+
+
+
+//.setCenter(polygonCentLatLon.get(0).Number, polygonCentLatLon.get(0).Number, 12);
+mapPanel.centerObject(polygon)
+
+
+
+//Define dates
+var date_start = ee.Date(startDate.getValue()[0]).format('YYYY-MM-dd');
+var date_end = ee.Date(endDate.getValue()[0]).format('YYYY-MM-dd');
+
+// Then, filter collection for s1
+// Load sent 2 data, filter by date and bounds. 
+
+// MOSAIC FUNCTION
+// https://gis.stackexchange.com/questions/280156/mosaicking-image-collection-by-date-day-in-google-earth-engine
+function mosaicByDate(imcol){
+  var imlist = imcol.toList(imcol.size())
+  print(imlist)
+
+  var unique_dates = imlist.map(function(im){
+    return ee.Image(im).date().format("YYYY-MM-dd")
+  }).distinct()
+print(unique_dates)
+  var mosaic_imlist = unique_dates.map(function(d){
+    d = ee.Date(d)
+    //print(d)
+    var im = imcol
+      .filterDate(d, d.advance(1, "day"))
+      .mosaic()
+    //print(im)
+    return im.set(
+        "system:time_start", d.millis(), 
+        "system:id", d.format("YYYY-MM-dd"))
+  })
+
+  return ee.ImageCollection(mosaic_imlist)
+}
+
+
+var collection_s1 = ee.ImageCollection('COPERNICUS/S1_GRD') 
+                   .filterDate(date_start, date_end)
+                   .filterBounds(polygon)
+                   .filter(ee.Filter.eq('instrumentMode', 'IW'))
+                   .filter(ee.Filter.eq('relativeOrbitNumber_start', 35))
+                   .filter(ee.Filter.inList('sliceNumber', [4,5]))
+                   .map(function(image){return image.clip(polygon)});
+print(collection_s1)
+
+
+// SPECKLE FILTER SENTINEL-1
+
+/*Copyright (c) 2021 SERVIR-Mekong
+/ Implementation by Andreas Vollrath (ESA), inspired by Johannes Reiche (Wageningen)
+*/
+
+function terrainCorrection(image) { 
+  var imgGeom = image.geometry();
+  var srtm = ee.Image('USGS/SRTMGL1_003').clip(imgGeom); // 30m srtm 
+  var sigma0Pow = ee.Image.constant(10).pow(image.divide(10.0));
+
+  // Article ( numbers relate to chapters) 
+  // 2.1.1 Radar geometry 
+  var theta_i = image.select('angle');
+  var phi_i = ee.Terrain.aspect(theta_i)
+    .reduceRegion(ee.Reducer.mean(), theta_i.get('system:footprint'), 1000)
+    .get('aspect');
+
+  // 2.1.2 Terrain geometry
+  var alpha_s = ee.Terrain.slope(srtm).select('slope');
+  var phi_s = ee.Terrain.aspect(srtm).select('aspect');
+
+  // 2.1.3 Model geometry
+  // reduce to 3 angle
+  var phi_r = ee.Image.constant(phi_i).subtract(phi_s);
+
+  // convert all to radians
+  var phi_rRad = phi_r.multiply(Math.PI / 180);
+  var alpha_sRad = alpha_s.multiply(Math.PI / 180);
+  var theta_iRad = theta_i.multiply(Math.PI / 180);
+  var ninetyRad = ee.Image.constant(90).multiply(Math.PI / 180);
+
+  // slope steepness in range (eq. 2)
+  var alpha_r = (alpha_sRad.tan().multiply(phi_rRad.cos())).atan();
+
+  // slope steepness in azimuth (eq 3)
+  var alpha_az = (alpha_sRad.tan().multiply(phi_rRad.sin())).atan();
+
+  // local incidence angle (eq. 4)
+  var theta_lia = (alpha_az.cos().multiply((theta_iRad.subtract(alpha_r)).cos())).acos();
+  var theta_liaDeg = theta_lia.multiply(180 / Math.PI);
+  // 2.2 
+  // Gamma_nought_flat
+  var gamma0 = sigma0Pow.divide(theta_iRad.cos());
+  var gamma0dB = ee.Image.constant(10).multiply(gamma0.log10());
+  var ratio_1 = gamma0dB.select('VV').subtract(gamma0dB.select('VH'));
+
+  // Volumetric Model
+  var nominator = (ninetyRad.subtract(theta_iRad).add(alpha_r)).tan();
+  var denominator = (ninetyRad.subtract(theta_iRad)).tan();
+  var volModel = (nominator.divide(denominator)).abs();
+
+  // apply model
+  var gamma0_Volume = gamma0.divide(volModel);
+  var gamma0_VolumeDB = ee.Image.constant(10).multiply(gamma0_Volume.log10());
+
+  // we add a layover/shadow maskto the original implmentation
+  // layover, where slope > radar viewing angle 
+  var alpha_rDeg = alpha_r.multiply(180 / Math.PI);
+  var layover = alpha_rDeg.lt(theta_i);
+
+  // shadow where LIA > 90
+  var shadow = theta_liaDeg.lt(85);
+
+  // calculate the ratio for RGB vis
+  var ratio = gamma0_VolumeDB.select('VV').subtract(gamma0_VolumeDB.select('VH'));
+
+  var output = gamma0_VolumeDB.addBands(ratio).addBands(alpha_r).addBands(phi_s).addBands(theta_iRad)
+    .addBands(layover).addBands(shadow).addBands(gamma0dB).addBands(ratio_1);
+
+  return image.addBands(
+    output.select(['VV', 'VH'], ['VV', 'VH']),
+    null,
+    true
+  );
+}
+
+
+function powerToDb(img){
+  return ee.Image(10).multiply(img.log10());
+}
+
+function dbToPower(img){
+  return ee.Image(10).pow(img.divide(10));
+}
+
+function leeSigma(img){
+  var meanReducer = ee.Reducer.mean(),
+      varianceReducer = ee.Reducer.variance(),
+      sumReducer = ee.Reducer.sum();
+  var bandNames = img.bandNames();
+  
+  var pow = dbToPower(img);
+  
+  var kernelWeights = ee.List.repeat(ee.List.repeat(1,9),9);
+  var kernel = ee.Kernel.fixed(9,9,kernelWeights,5,5);
+  
+  var targetWeights = ee.List.repeat(ee.List.repeat(1,3),3);
+  var targetKernel = ee.Kernel.fixed(3,3,targetWeights,1,1);
+  
+  var Tk = ee.Image(7);
+  var sigma = '0.9';
+  var looks = '4';
+  
+  // Lookup table for range and eta values for intensity
+  var sigmaLookup = ee.Dictionary({
+    1: ee.Dictionary({
+      0.5: ee.Dictionary({
+        'A1': 0.436,
+        'A2': 1.92,
+        'η': 0.4057
+      }),
+      0.6: ee.Dictionary({
+        'A1': 0.343,
+        'A2': 2.21,
+        'η': 0.4954
+      }),
+      0.7: ee.Dictionary({
+        'A1': 0.254,
+        'A2': 2.582,
+        'η': 0.5911
+      }),
+      0.8: ee.Dictionary({
+        'A1': 0.168,
+        'A2': 3.094,
+        'η': 0.6966
+      }),
+      0.9: ee.Dictionary({
+        'A1': 0.084,
+        'A2': 3.941,
+        'η': 0.8191
+      }),
+      0.95: ee.Dictionary({
+        'A1': 0.043,
+        'A2': 4.840,
+        'η': 0.8599
+      })
+    }),
+    2: ee.Dictionary({
+      0.5: ee.Dictionary({
+        'A1': 0.582,
+        'A2': 1.584,
+        'η': 0.2763
+      }),
+      0.6: ee.Dictionary({
+        'A1': 0.501,
+        'A2': 1.755,
+        'η': 0.3388
+      }),
+      0.7: ee.Dictionary({
+        'A1': 0.418,
+        'A2': 1.972,
+        'η': 0.4062
+      }),
+      0.8: ee.Dictionary({
+        'A1': 0.327,
+        'A2': 2.260,
+        'η': 0.4819
+      }),
+      0.9: ee.Dictionary({
+        'A1': 0.221,
+        'A2': 2.744,
+        'η': 0.5699
+      }),
+      0.95: ee.Dictionary({
+        'A1': 0.152,
+        'A2': 3.206,
+        'η': 0.6254
+      }),
+    }),
+    3: ee.Dictionary({
+      0.5: ee.Dictionary({
+        'A1': 0.652,
+        'A2': 1.458,
+        'η': 0.2222
+      }),
+      0.6: ee.Dictionary({
+        'A1': 0.580,
+        'A2': 1.586,
+        'η': 0.2736
+      }),
+      0.7: ee.Dictionary({
+        'A1': 0.505,
+        'A2': 1.751,
+        'η': 0.3280
+      }),
+      0.8: ee.Dictionary({
+        'A1': 0.419,
+        'A2': 1.865,
+        'η': 0.3892
+      }),
+      0.9: ee.Dictionary({
+        'A1': 0.313,
+        'A2': 2.320,
+        'η': 0.4624
+      }),
+      0.95: ee.Dictionary({
+        'A1': 0.238,
+        'A2': 2.656,
+        'η': 0.5084
+      }),
+    }),
+    4: ee.Dictionary({
+      0.5: ee.Dictionary({
+        'A1': 0.694,
+        'A2': 1.385,
+        'η': 0.1921
+      }),
+      0.6: ee.Dictionary({
+        'A1': 0.630,
+        'A2': 1.495,
+        'η': 0.2348
+      }),
+      0.7: ee.Dictionary({
+        'A1': 0.560,
+        'A2': 1.627,
+        'η': 0.2825
+      }),
+      0.8: ee.Dictionary({
+        'A1': 0.480,
+        'A2': 1.804,
+        'η': 0.3354
+      }),
+      0.9: ee.Dictionary({
+        'A1': 0.378,
+        'A2': 2.094,
+        'η': 0.3991
+      }),
+      0.95: ee.Dictionary({
+        'A1': 0.302,
+        'A2': 2.360,
+        'η': 0.4391
+      }),
+    })
+  });
+  
+  // extract data from lookup
+  var looksDict = ee.Dictionary(sigmaLookup.get(ee.String(looks)));
+  var sigmaImage = ee.Dictionary(looksDict.get(ee.String(sigma))).toImage();
+  var a1 = sigmaImage.select('A1');
+  var a2 = sigmaImage.select('A2');
+  var aRange = a2.subtract(a1);
+  var eta = sigmaImage.select('η').pow(2);
+  
+  // MMSE estimator
+  var mmseMask = pow.gte(a1).or(pow.lte(a2));
+  var mmseIn = pow.updateMask(mmseMask);
+  var oneImg = ee.Image(1);
+  var z = mmseIn.reduceNeighborhood(meanReducer,kernel,null,true);
+  var varz = mmseIn.reduceNeighborhood(varianceReducer,kernel);
+  var varx = (varz.subtract(z.abs().pow(2).multiply(eta))).divide(oneImg.add(eta));
+  var b = varx.divide(varz);
+  var mmse = oneImg.subtract(b).multiply(z.abs()).add(b.multiply(mmseIn));
+  
+  // workflow
+  var z99 = ee.Dictionary(pow.reduceRegion({
+    reducer: ee.Reducer.percentile([99],null,255,0.001,1e6),
+    geometry: img.geometry(),
+    scale:10,
+    bestEffort:true
+  })).toImage();
+  
+  var overThresh = pow.gte(z99);
+  
+  var K = overThresh.reduceNeighborhood(sumReducer,targetKernel,null,true);
+    
+  var retainPixel = K.gte(Tk);
+  var xHat = powerToDb(pow.updateMask(retainPixel).unmask(mmse));
+  
+  return ee.Image(xHat).clip(img.geometry()).rename(bandNames)
+    .copyProperties(img,null,null)
+    .set('system:time_start',img.get('system:time_start'));
+}
+
+
+// IMPLEMENT SPECKLE FILTER AND TERRAIN CORRECTION
+
+var collection_s1_terrainCorrection = collection_s1.map(terrainCorrection);
+var collection_s1_leeSigma = collection_s1.map(leeSigma);
+
+
+var collection_s1_mosaic = mosaicByDate(collection_s1_leeSigma)
+
+
+// Apply Threshold
+
+// Function to calculate and add a VV_threshold band
+var addLeeSigma = function(image) {
+  
+  // THRESHOLD
+  // if AWEI less or equal to thres >= 0 else 1
+  var VVthres = image.lte(thresholdLeeSigma).rename('VVthres')
+  
+  //convert to area 
+  var toAreaVV = VVthres.expression(
+    'thresBAND * 10 * 10 * 0.0001', {
+      'thresBAND': VVthres.select('VVthres')
+    }).rename("toAreaVV")
+    
+  return image.addBands(VVthres).addBands(toAreaVV);
+}
+
+// Add AWEI band to image collection
+var collectionLeeSigma = collection_s1_leeSigma.select("VV").map(addLeeSigma);
+print(collectionLeeSigma)
+
+// Add frequency map 
+var freqLeeSigma = collectionLeeSigma.reduce('sum')
+/*
+
+*/
+
+// Then, filter collection for s2
+var collection_s2 = ee.ImageCollection('COPERNICUS/S2_SR') 
+                   .filterDate(date_start, date_end) 
+                   .filterBounds(wildlife)
+                   .filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE',ccSlider.getValue()))
+                  .map(function(image){return image.clip(polygon)});
+
+// Function to calculate and add an AWEI band
+var addAWEI = function(image) {
+  
+  var awei = image.expression(
+    '((4 * (band3 - band11)) - ((0.25 * band8) + (2.75 * band12)))', {
+      'band3': image.select('B3'),
+      'band11': image.select('B11'),
+      'band8': image.select('B8'),
+      'band12': image.select('B12')
+  }).rename("AWEI")
+
+  
+   // THRESHOLD
+  // if AWEI less or equal to thres >= 0 else 1
+  var thres = awei.gte(thresholdAWEI).rename('thres')
+  
+  //convert to area 
+  var toArea = thres.expression(
+    'thresBAND * 10 * 10 * 0.0001', {
+      'thresBAND': thres.select('thres')
+    }).rename("toArea")
+    
+  return image.addBands(awei).addBands(thres).addBands(toArea);
+}
+
+// Function to calculate and add an AWEI band
+var addAWEI = function(image) {
+
+   // THRESHOLD
+  // if AWEI less or equal to thres >= 0 else 1
+  var thres = awei.gte(thresholdLeeSigma).rename('thres')
+  
+  //convert to area 
+  var toArea = thres.expression(
+    'thresBAND * 10 * 10 * 0.0001', {
+      'thresBAND': thres.select('thres')
+    }).rename("toArea")
+    
+  return image.addBands(awei).addBands(thres).addBands(toArea);
+}
+
+
+// Function to calculate and add an AWEI band
+var addAWEI = function(image) {
+  
+  var awei = image.expression(
+    '((4 * (band3 - band11)) - ((0.25 * band8) + (2.75 * band12)))', {
+      'band3': image.select('B3'),
+      'band11': image.select('B11'),
+      'band8': image.select('B8'),
+      'band12': image.select('B12')
+  }).rename("AWEI")
+
+  
+   // THRESHOLD
+  // if AWEI less or equal to thres >= 0 else 1
+  var thres = awei.gte(thresholdAWEI).rename('thres')
+  
+  //convert to area 
+  var toArea = thres.expression(
+    'thresBAND * 10 * 10 * 0.0001', {
+      'thresBAND': thres.select('thres')
+    }).rename("toArea")
+    
+  return image.addBands(awei).addBands(thres).addBands(toArea);
+}
+
+
+// Function to calculate and add an AWEI band
+var addAWEI = function(image) {
+  
+  var awei = image.expression(
+    '((4 * (band3 - band11)) - ((0.25 * band8) + (2.75 * band12)))', {
+      'band3': image.select('B3'),
+      'band11': image.select('B11'),
+      'band8': image.select('B8'),
+      'band12': image.select('B12')
+  }).rename("AWEI")
+
+  
+   // THRESHOLD
+  // if AWEI less or equal to thres >= 0 else 1
+  var thres = awei.gte(thresholdAWEI).rename('thres')
+  
+  //convert to area 
+  var toArea = thres.expression(
+    'thresBAND * 10 * 10 * 0.0001', {
+      'thresBAND': thres.select('thres')
+    }).rename("toArea")
+    
+  return image.addBands(awei).addBands(thres).addBands(toArea);
+}
+
+// Add AWEI band to image collection
+var collectionAWEI = collection_s2.map(addAWEI);
+print(collectionAWEI)
+
+// Add frequency map 
+var freq = collectionAWEI.reduce('sum')
+
+
+// Create a time series chart.
+var plotAWEI = ui.Chart.image
+  .seriesByRegion(collectionAWEI, polygon, ee.Reducer.sum(),
+  'toArea',10,'system:time_start', 'system:index')
+              .setChartType('LineChart').setOptions({
+                title: 'Water Area vs Time',
+                hAxis: {title: 'Date'},
+                vAxis: {title: 'Water Area (Hectares)'}
+})
+
+// Display.
+print(plotAWEI);
+
+// Create a time series chart.
+var plotLeeSigma = ui.Chart.image
+  .seriesByRegion(collectionLeeSigma, polygon, ee.Reducer.sum(),
+  'toAreaVV',10,'system:time_start', 'system:index')
+              .setChartType('LineChart').setOptions({
+                title: 'Water Area vs Time',
+                hAxis: {title: 'Date'},
+                vAxis: {title: 'Water Area (Hectares)'}
+})
+
+// Display.
+print(plotLeeSigma);
+
+
+var mergeS1S2 = collectionLeeSigma.select("toAreaVV").merge(collectionAWEI.select("toArea"))
+                //.toBands()
+                //.select(["toArea", "toAreaVV"])
+
+
+var chart =
+    ui.Chart.image
+        .series({
+          imageCollection: mergeS1S2,
+          region: polygon,
+          reducer: ee.Reducer.sum(),
+          scale: 10,
+          xProperty: 'system:time_start'
+        })
+        .setSeriesNames(['S2', 'S1'])
+        .setChartType('ScatterChart')
+        .setOptions({
+          title: 'Water Area Over Time',
+          hAxis: {title: 'Date', titleTextStyle: {italic: false, bold: true}},
+          vAxis: {
+            title: 'Water Area (Hectares)',
+            titleTextStyle: {italic: false, bold: true}
+          },
+          //lineWidth: 5,
+          colors: ['#5e3c99', '#e66101']
+          //curveType: 'function'
+        });
+
+
+//Set the postion of the chart and add it to the map    
+chart.style().set({
+    position: 'top-left',
+    width: '500px',
+    height: '300px'
+  });
+  
+mapPanel.add(chart)
+
+
+
+
+var s1maps = S1watermaps.getValue()
+var s2maps = S2watermaps.getValue()
+
+// SENTINEL-1 WATER CLASS MAPS
+var listOfImagesS1 = collectionLeeSigma.toList(collectionAWEI.size()); // 29 images
+
+var visParams = {
+  bands: ['VVthres'],
+  min: 0,
+  max: 1,
+  palette: palette 
+};
+
+var lengthS1 = collectionAWEI.size().getInfo()
+
+// client side loop
+for(var i = 0; i < lengthS1	; i++){
+  if (s1maps == true){ // display each image in collection
+  var image = ee.Image(listOfImagesS1.get(i));
+  var s1date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
+  var labels1 = 'Sentinel-1 ' + s1date.getInfo()
+  mapPanel.addLayer(image, visParams, labels1)
+  }
+}
+
+//SENTINEL-2 WATER CLASS MAPS
+var listOfImagesS2 = collectionAWEI.toList(collectionAWEI.size()); // 29 images
+
+var visParams = {
+  bands: ['thres'],
+  min: 0,
+  max: 1,
+  palette: palette 
+};
+
+var lengthS2 = collectionAWEI.size().getInfo()
+
+// client side loop
+for(var i = 0; i < lengthS2	; i++){
+  if (s2maps == true){ // display each image in collection
+  var image = ee.Image(listOfImagesS2.get(i));
+  var labels2 = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
+  var s2date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
+  var labels2 = 'Sentinel-2 ' + s2date.getInfo()
+  mapPanel.addLayer(image, visParams, labels2)
+  }
+}
+
+mapPanel.addLayer(freq.select('toArea_sum'), {palette: palette}, 'Water Frequency - Sentinel-2')
+mapPanel.addLayer(freqLeeSigma.select('toAreaVV_sum'), {palette: palette}, 'Water Frequency - Sentinel-1')
+mapPanel.addLayer(polygon,{color: 'white'}, "AOI Outline", true, 0);
+
+///////////////// LEGEND //////////////////
+
+//LEGEND 
+//Source: https://mygeoblog.com/2017/03/02/creating-a-gradient-legend/
+// set position of panel
+var legendpos3 = ui.Panel({
+  style: {
+    position: 'bottom-right',
+    padding: '8px 15px'
+  }
+});
+ 
+// Create legend title
+var legendTitle3 = ui.Label({
+  value: 'Color Map',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '16px',
+    margin: '0 0 4px 0',
+    padding: '0'
+    }
+});
+
+ // Add the title to the panel
+legendpos3.add(legendTitle3); 
+
+// create the legend image
+var lon = ee.Image.pixelLonLat().select('latitude');
+var gradient = lon.multiply((visParam.max-visParam.min)/100).add(visParam.min);
+var legendImage = gradient.visualize(visParam);
+
+// create text on top of legend
+var panel3 = ui.Panel({
+    widgets: [
+      ui.Label("Water")
+    ],
+  });
+
+legendpos3.add(panel3);
+  
+// create thumbnail from the image
+var thumbnail3 = ui.Thumbnail({
+  image: legendImage, 
+  params: {bbox:'0,0,10,100', dimensions:'10x200'},  
+  style: {padding: '1px', position: 'bottom-center'}
+});
+
+// add the thumbnail to the legend
+legendpos3.add(thumbnail3);
+
+// create text on top of legend
+var panel4 = ui.Panel({
+    widgets: [
+      ui.Label(["Not Water"])
+    ],
+  });
+
+legendpos3.add(panel4);
+
+mapPanel.add(legendpos3);
+
+  }
+});
+
+panel.add(submit);
