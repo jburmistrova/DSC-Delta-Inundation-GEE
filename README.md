@@ -31,7 +31,7 @@ Next select the following options
 - Cloud Cover (Sentinel-2 only)
 - Water maps (individual for 
 
-WARNING: 
+**WARNING:** 
 - Select the shapefile, or location, you are interested to run. If not, the code will not run.
 - Adding water maps will significantly increase how long the code runs. Select a shorter date range and use with caution. 
 
