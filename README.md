@@ -3,7 +3,7 @@
 
 # Code
 Settings are set to anyone can access the repo:
-[GEE Code](https://code.earthengine.google.com/?accept_repo=users/valle/Yolo_Inundation_Mapping)
+[GEE Code](https://code.earthengine.google.com/e4a0913fae06c1d0fcda2d60204676ca?accept_repo=users%2Fvalle%2FYolo_Inundation_Mapping)
 
 
 # UI
