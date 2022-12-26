@@ -1,3 +1,4 @@
+//Written and Compiled by Julia Burmistrova
 
 //Convert From Table to Geometry
 var bypass = ee.FeatureCollection(table).geometry()
